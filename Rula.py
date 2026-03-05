@@ -163,7 +163,7 @@ else:
     raise ValueError(f"Formato de archivo no soportado: {ext}")
 
 # normalizamos los quaterniones y calculamos ángulos relativos
-sensors = ['pelvis_imu', 'torso_imu', 'humerus_r_imu', 'radius_r_imu']
+sensors = ['pelvis_imu', 'torso_imu', 'humerus_r_imu', 'radius_r_imu', 'hand_r_imu']
 for s in sensors:
     if s in df.columns:
         df[s + '_q'] = df[s].apply(parse_quat)
@@ -172,6 +172,9 @@ if 'pelvis_imu_q' in df.columns and 'torso_imu_q' in df.columns:
     df['trunk_angles'] = df.apply(lambda r: calculate_joint_angles(r['pelvis_imu_q'], r['torso_imu_q']), axis=1)
 if 'torso_imu_q' in df.columns and 'humerus_r_imu_q' in df.columns:
     df['arm_angles'] = df.apply(lambda r: calculate_joint_angles(r['torso_imu_q'], r['humerus_r_imu_q']), axis=1)
+# ángulo de muñeca entre antebrazo (radius) y mano
+if 'radius_r_imu_q' in df.columns and 'hand_r_imu_q' in df.columns:
+    df['wrist_angles'] = df.apply(lambda r: calculate_joint_angles(r['radius_r_imu_q'], r['hand_r_imu_q']), axis=1)
 
 # CALIBRACIÓN (zeroing) opcional
 if 'trunk_angles' in df.columns:
@@ -187,9 +190,12 @@ if 'trunk_angles' in df.columns:
     df['flexion_tronco'] = df['trunk_angles'].apply(lambda x: x[0]) - offset_tronco
 if 'arm_angles' in df.columns:
     df['flexion_brazo'] = df['arm_angles'].apply(lambda x: x[0]) - offset_brazo
+if 'wrist_angles' in df.columns:
+    # usar componente 0 como flexión extens
+    df['flexion_muneca'] = df['wrist_angles'].apply(lambda x: x[0])
 
 # límites circulares
-for col in ['flexion_tronco', 'flexion_brazo']:
+for col in ['flexion_tronco', 'flexion_brazo', 'flexion_muneca']:
     if col in df.columns:
         df[col] = (df[col] + 180) % 360 - 180
 
@@ -203,17 +209,20 @@ for col in ['flexion_tronco', 'flexion_brazo']:
 # calculamos las puntuaciones básicas y aplicamos ajustes de posición
 def puntuaciones_por_fila(row):
     extras = {}
-    # en el futuro se pueden poblar extras con rotación, abducción, etc.
+    # brazo
     score_brazo = evaluar_rango(row.get('flexion_brazo', 0), 'brazo')
     score_brazo = aplicar_posiciones(score_brazo, 'brazo', extras)
-    # comprobación de cruce de línea media para antebrazo
     if 'arm_angles' in row and isinstance(row['arm_angles'], (list, tuple)):
         score_brazo += brazo_cruza_linea_media(row['arm_angles'])
-
+    # muñeca
+    score_muneca = evaluar_rango(row.get('flexion_muneca', 0), 'muñeca')
+    score_muneca = aplicar_posiciones(score_muneca, 'muñeca', extras)
+    # tronco
     score_tronco = evaluar_rango(row.get('flexion_tronco', 0), 'tronco')
     score_tronco = aplicar_posiciones(score_tronco, 'tronco', extras)
-
-    return pd.Series({'Puntos_Brazo': score_brazo, 'Puntos_Tronco': score_tronco})
+    return pd.Series({'Puntos_Brazo': score_brazo,
+                      'Puntos_Muneca': score_muneca,
+                      'Puntos_Tronco': score_tronco})
 
 puntos = df.apply(puntuaciones_por_fila, axis=1)
 df = pd.concat([df, puntos], axis=1)
@@ -227,7 +236,8 @@ estado_piernas = 'depie'  # opciones: 'depie','sentado','apoyado'
 puntaje_piernas = rula_diccionario['piernas']['estado'].get(estado_piernas, 2)
 
 # cálculo de los score de grupos A y B
-df['Score_Grupo_A'] = df['Puntos_Brazo'] + Uso_Muscular + Carga_Kilos
+# ahora brazo y muñeca forman parte del grupo A
+df['Score_Grupo_A'] = df['Puntos_Brazo'] + df.get('Puntos_Muneca',0) + Uso_Muscular + Carga_Kilos
 df['Score_Grupo_B'] = df['Puntos_Tronco'] + Uso_Muscular + Carga_Kilos + puntaje_piernas
 
 # Matriz C simplificada (Para calcular el riesgo final de 1 a 7)
@@ -251,7 +261,8 @@ df['Nivel_Riesgo'] = df['RULA_Final'].apply(clasificar_riesgo)
 # 4. EXPORTACIÓN A EXCEL Y GENERACIÓN DE GRÁFICAS
 # =========================================================
 # Guardar informe, seleccionando el método según la extensión
-columnas_export = ['time', 'flexion_tronco', 'flexion_brazo', 'Puntos_Brazo', 'Puntos_Tronco', 'RULA_Final']
+columnas_export = ['time', 'flexion_tronco', 'flexion_brazo', 'flexion_muneca',
+                   'Puntos_Brazo', 'Puntos_Muneca', 'Puntos_Tronco', 'RULA_Final']
 ext_rep = output_report.split('.')[-1].lower()
 if ext_rep in ('xlsx','xls'):
     df[columnas_export].to_excel(output_report, index=False, engine='openpyxl')
