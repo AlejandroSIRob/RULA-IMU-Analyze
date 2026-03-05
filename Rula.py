@@ -213,20 +213,37 @@ for col in ['flexion_tronco', 'flexion_brazo', 'flexion_antebrazo', 'flexion_mun
 # calculamos las puntuaciones básicas y aplicamos ajustes de posición
 def puntuaciones_por_fila(row):
     extras = {}
-    # brazo
+    
+    # --- NOVEDAD: Rellenamos los "extras" para que las penalizaciones funcionen ---
+    # Extraemos abducción (eje Y = índice 1) y rotación (eje Z = índice 2)
+    if 'arm_angles' in row and isinstance(row['arm_angles'], (list, tuple, np.ndarray)):
+        extras['abduccion_hombro'] = abs(row['arm_angles'][1])
+        
+    if 'trunk_angles' in row and isinstance(row['trunk_angles'], (list, tuple, np.ndarray)):
+        extras['inclinacion_lateral_tronco'] = abs(row['trunk_angles'][1])
+        extras['rotacion_tronco'] = abs(row['trunk_angles'][2])
+
+    # 1. Puntos Brazo (Ahora sí aplicará +1 si abducción > 20)
     score_brazo = evaluar_rango(row.get('flexion_brazo', 0), 'brazo')
     score_brazo = aplicar_posiciones(score_brazo, 'brazo', extras)
-    if 'arm_angles' in row and isinstance(row['arm_angles'], (list, tuple)):
+    
+    # 2. Cruce de línea media (Añadido np.ndarray para que funcione)
+    if 'arm_angles' in row and isinstance(row['arm_angles'], (list, tuple, np.ndarray)):
         score_brazo += brazo_cruza_linea_media(row['arm_angles'])
-    # muñeca
+        
+    # 3. Puntos Muñeca
     score_muneca = evaluar_rango(row.get('flexion_muneca', 0), 'muñeca')
     score_muneca = aplicar_posiciones(score_muneca, 'muñeca', extras)
-    # tronco
+    
+    # 4. Puntos Tronco (Ahora sí aplicará +1 si hay rotación o inclinación)
     score_tronco = evaluar_rango(row.get('flexion_tronco', 0), 'tronco')
     score_tronco = aplicar_posiciones(score_tronco, 'tronco', extras)
-    return pd.Series({'Puntos_Brazo': score_brazo,
-                      'Puntos_Muneca': score_muneca,
-                      'Puntos_Tronco': score_tronco})
+    
+    return pd.Series({
+        'Puntos_Brazo': score_brazo, 
+        'Puntos_Muneca': score_muneca, 
+        'Puntos_Tronco': score_tronco
+    })
 
 puntos = df.apply(puntuaciones_por_fila, axis=1)
 df = pd.concat([df, puntos], axis=1)
