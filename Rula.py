@@ -176,26 +176,30 @@ if 'torso_imu_q' in df.columns and 'humerus_r_imu_q' in df.columns:
 if 'radius_r_imu_q' in df.columns and 'hand_r_imu_q' in df.columns:
     df['wrist_angles'] = df.apply(lambda r: calculate_joint_angles(r['radius_r_imu_q'], r['hand_r_imu_q']), axis=1)
 
-# CALIBRACIÓN (zeroing) opcional
-if 'trunk_angles' in df.columns:
-    offset_tronco = df['trunk_angles'].iloc[0][0]
-else:
-    offset_tronco = 0
-if 'arm_angles' in df.columns:
-    offset_brazo = df['arm_angles'].iloc[0][0]
-else:
-    offset_brazo = 0
+# --- CALIBRACIÓN ROBUSTA (Media de los primeros 10 frames) ---
+def calibrar_con_media(df, col_angles, index=0, num_frames=10):
+    if col_angles in df.columns:
+        # calculamos la media de los primeros N frames (ej. 10) para evitar el ruido del inicio
+        offset = df[col_angles].iloc[:num_frames].apply(lambda x: x[index]).mean()
+        return ((df[col_angles].apply(lambda x: x[index]) - offset) + 180) % 360 - 180
+    # si no existe la columna devolvemos una serie de ceros para no romper el concat
+    return pd.Series([0] * len(df))
 
+# aplicamos la nueva función a todos los segmentos que tengamos
+
+# trunk y brazo ya estaban definidos anteriormente
 if 'trunk_angles' in df.columns:
-    df['flexion_tronco'] = df['trunk_angles'].apply(lambda x: x[0]) - offset_tronco
+    df['flexion_tronco'] = calibrar_con_media(df, 'trunk_angles', 0)
 if 'arm_angles' in df.columns:
-    df['flexion_brazo'] = df['arm_angles'].apply(lambda x: x[0]) - offset_brazo
+    df['flexion_brazo'] = calibrar_con_media(df, 'arm_angles', 0)
+# por si llegase a introducirse una columna de antebrazo independiente
+if 'forearm_angles' in df.columns:
+    df['flexion_antebrazo'] = calibrar_con_media(df, 'forearm_angles', 0)
 if 'wrist_angles' in df.columns:
-    # usar componente 0 como flexión extens
-    df['flexion_muneca'] = df['wrist_angles'].apply(lambda x: x[0])
+    df['flexion_muneca'] = calibrar_con_media(df, 'wrist_angles', 0)
 
-# límites circulares
-for col in ['flexion_tronco', 'flexion_brazo', 'flexion_muneca']:
+# límites circulares: incluye ahora el antebrazo si se calculó
+for col in ['flexion_tronco', 'flexion_brazo', 'flexion_antebrazo', 'flexion_muneca']:
     if col in df.columns:
         df[col] = (df[col] + 180) % 360 - 180
 
